@@ -25,6 +25,9 @@
 
 #define DEBUG 1
 
+#include "metadata.h"
+
+
 typedef struct server_state {
     vmguest_t *live_vms;
     int nr_allocated_vms;
@@ -38,6 +41,7 @@ typedef struct server_state {
     long msi_vectors;
 } server_state_t;
 
+
 void usage(char const *prg);
 int find_set(fd_set * readset, int max);
 void print_vec(server_state_t * s, const char * c);
@@ -46,7 +50,7 @@ void add_new_guest(server_state_t * s);
 void parse_args(int argc, char **argv, server_state_t * s);
 int create_listening_socket(char * path);
 
-
+/*
 
 #define META_MAGIC 20101992
 #define META_MAGIC_OFFSET 10
@@ -89,7 +93,7 @@ typedef struct meta_data{
 }meta_data_t;
 
        
-
+*/
 
 int create_metadata_for_pscom(server_state_t *s)
 {
@@ -97,18 +101,14 @@ int create_metadata_for_pscom(server_state_t *s)
     void *map_region = NULL;
     meta_data_t *meta_data;
     unsigned int *bitmap;
-    char hostname[50];
+    char hostname[65];
     long int size;
 
-    hostname[49] = '\0';
-    gethostname(hostname,49);	
-
-
-
-
+    hostname[64] = '\0';
+    gethostname(hostname,64);	
    
 
-   size = sizeof(meta_data_t)+16390;  // TO DO: calc bitmap size!
+    size = s->shm_size;//sizeof(meta_data_t)+16390;  // TO DO: calc bitmap size!
 	
     if ((map_region=mmap(NULL,size, PROT_READ|PROT_WRITE, MAP_SHARED, s->shm_fd, 0))<0){
  
@@ -154,41 +154,8 @@ int create_metadata_for_pscom(server_state_t *s)
     meta_data->numOfFrames = meta_data->memSize / FRAME_SIZE;
     if (meta_data->memSize % FRAME_SIZE) meta_data->frameSize++;  // one smaller frame es 'rest'
 
-   
-    
-
-
-
     bitmap = map_region + meta_data->bitmapOffset; // ToDO: make size more portable
-    
-    
-/*
- * 
- * totalNumberOfFrames = map1_size_Bayte / IVSHMEM_FRAMESIZE;
- * neededInts = totalNumberofFrames / BitsPerInt; 
- * int Bitmap[neededInts] 
- *
- * */
-
-
-	
-  //  int numOfFrames = (dev->map1_size_Byte / IVSHMEM_FRAMESIZE);
-  //  if (dev->map1_size_Byte % IVSHMEM_FRAMESIZE) numOfFrames++;
-    	
-
-//    int Bitmap[neededInts];     
-//    unsigned bitmap[TOTAL_BITS / WORD_SIZE +1] = {0};
-/*
- *  size_t index  = nbit / (sizeof(bitmap_data_t) * 8);
- *      size_t bitpos = nbit % (sizeof(bitmap_data_t) * 8);
- *
- *
- * */
-   
-
- // SETBIT(bitmap,50);
-    
-    
+            
       //set own frames to: used!
       //make sure, that the BITMAP is always at the end of metadata!
     
@@ -203,22 +170,8 @@ int create_metadata_for_pscom(server_state_t *s)
      
     meta_data->metaSize = sizeof(meta_data_t) + BitmapSize * sizeof(unsigned int);
 
-  //  unsigned int* ptr = NULL;
-  //  unsigned int* ptr2 = NULL;
-  //  printf("%p %p \n",bitmap, bitmap + BitmapSize*sizeof(unsigned int)); 
 	
-   // for(ptr = bitmap; ptr <= bitmap + BitmapSize*sizeof(unsigned int); ptr++){ //initialize Bitmap
-//	*ptr = 0;
-//	ptr2 = ptr;
-//	ptr2++;
-	
-//	printf("%d %p %p\n",*ptr,ptr,ptr2);
-	
- //   }
-
-
-	
-    int n;
+    long n;
 
     for(n=0; n<BitmapSize; n++){
     bitmap[n] = 0;
@@ -238,7 +191,6 @@ int create_metadata_for_pscom(server_state_t *s)
     return 0;
 
 }
-
 
 
 
@@ -269,7 +221,7 @@ int main(int argc, char ** argv)
 
     //  #######################################################################
 
-	//first version: simple ask for metadata -> ToDo: argument
+	//first version: simply asking for metadata -> ToDo: arguments
 	
 	printf("Do you want to use ivshmem for pscom? (y / n / Z): ");
 
@@ -283,7 +235,7 @@ int main(int argc, char ** argv)
  	    create_metadata_for_pscom(s);
 	    break;
 	}
-	if (input == 'z'){
+	if (input == 'Z'){
 	int* mem = NULL;
  	int Zeros[10000] = {0};    
         mem=mmap(NULL,sizeof(Zeros), PROT_READ|PROT_WRITE, MAP_SHARED, s->shm_fd, 0);
@@ -295,14 +247,6 @@ int main(int argc, char ** argv)
 	
 	}
 	
-
-//	initialize filesystem!
-	
-	
-	
-
-
-
 
     //  #######################################################################
 
