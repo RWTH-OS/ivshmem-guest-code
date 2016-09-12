@@ -17,11 +17,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "send_scm.h"
+#include <semaphore.h> //<--
+#include <limits.h>
 
 #define DEFAULT_SOCK_PATH "/tmp/ivshmem_socket"
 #define DEFAULT_SHM_OBJ "ivshmem"
 
 #define DEBUG 1
+
+#include "metadata.h"
+
 
 typedef struct server_state {
     vmguest_t *live_vms;
@@ -36,6 +41,7 @@ typedef struct server_state {
     long msi_vectors;
 } server_state_t;
 
+
 void usage(char const *prg);
 int find_set(fd_set * readset, int max);
 void print_vec(server_state_t * s, const char * c);
@@ -44,8 +50,153 @@ void add_new_guest(server_state_t * s);
 void parse_args(int argc, char **argv, server_state_t * s);
 int create_listening_socket(char * path);
 
+/*
+
+#define META_MAGIC 20101992
+#define META_MAGIC_OFFSET 10
+#define META_LOCK_OFFSET 12  // ??!!
+#define META_BITMAP_SIZE_OFFSET 14
+#define BITMAP_OFFSET 16
+
+
+#define IVSHMEM_FRAMESIZE 40 //in Byte
+#define WORD_SIZE (CHAR_BIT * sizeof(int))
+#define TOTAL_BITS 1000000
+//#define SETBIT(b,n) ((b)[(n)/WORD_SIZE] |= (1 << ((n) % WORD_SIZE)))
+#define SET_BIT(b,n) ((b)[(n)/WORD_SIZE] |= (1 << ((n) % WORD_SIZE)))
+#define CLR_BIT(b,n)  ((b)[(n)/WORD_SIZE] &= ~(1 << ((n) % WORD_SIZE)))
+
+#define META_MAP_SIZE 1024
+
+
+
+//OFFSETS   not needed any more <-- strct instead
+
+//#define MAGIC_OFFSET 0
+//#define MUTEX_OFFSET 4 
+//#define SIZE_OFFSET 20
+//#define BITMAP_OFFSET 24
+//#define BITMAP_SIZE_OFFSET 40   //check out sem size and adapt!
+
+#define FRAME_SIZE 4096 //in Byte
+
+typedef struct meta_data{
+    
+    int magic;
+    sem_t meta_semaphore;
+    char hostname[50];
+    int memSize;
+    int bitmapOffset;
+    int numOfFrames;
+    int frameSize;
+    int metaSize; //Byte
+}meta_data_t;
+
+       
+*/
+
+int create_metadata_for_pscom(server_state_t *s)
+{
+  
+    void *map_region = NULL;
+    meta_data_t *meta_data;
+    unsigned int *bitmap;
+    char hostname[65];
+    long int size;
+
+    hostname[64] = '\0';
+    gethostname(hostname,64);	
+   
+
+    size = s->shm_size;//sizeof(meta_data_t)+16390;  // TO DO: calc bitmap size!
+	
+    if ((map_region=mmap(NULL,size, PROT_READ|PROT_WRITE, MAP_SHARED, s->shm_fd, 0))<0){
+ 
+ 	    fprintf(stderr, "ERROR: cannot mmap file\n");
+	    return -1;
+    }
+	
+
+    meta_data =(meta_data_t*)map_region;
+    sem_t *mutex = &meta_data->meta_semaphore;  // use semaphore as mutex  //make reference shorter
+   
+    if (meta_data->magic == META_MAGIC){
+	
+	// @User: what to do? Seems to be initialized... Reinitialize?
+	printf("Found existing metadata block!\n(o) overwrite or (c) cancel?: ");
+	
+	int n;
+	for(n = 0; n <5; n++) {
+	char input = getchar();
+
+	if (input == 'c') return -2;
+	if (input == 'o') {
+	    printf("\nA new metadata block will be created...\n");
+ 	    break;
+	}
+	
+ 	printf("\nplease enter o or c\n");
+	
+	}
+
+    
+    }
+
+    sem_init(mutex,1,1);
+
+    while(sem_wait(mutex)); //wait for mutex // should usually be the only one!   
+
+    meta_data->magic = META_MAGIC; 
+    meta_data->bitmapOffset = sizeof(meta_data_t); 
+    strcpy(meta_data->hostname, hostname);
+    meta_data->memSize = s->shm_size;
+    meta_data->frameSize = FRAME_SIZE;
+    meta_data->numOfFrames = meta_data->memSize / FRAME_SIZE;
+    if (meta_data->memSize % FRAME_SIZE) meta_data->frameSize++;  // one smaller frame es 'rest'
+
+    bitmap = map_region + meta_data->bitmapOffset; // ToDO: make size more portable
+            
+      //set own frames to: used!
+      //make sure, that the BITMAP is always at the end of metadata!
+    
+ 
+    //bitmap size = NumOfFrames / 32 = numInt32 = numInts
+
+    int BitmapSize = meta_data->numOfFrames / (sizeof(unsigned int)*CHAR_BIT);  
+        if (meta_data->numOfFrames % sizeof(unsigned int)*CHAR_BIT) BitmapSize++;  
+    
+    int metaDataFrames = (sizeof(meta_data_t)+ BitmapSize * sizeof(unsigned int)) / FRAME_SIZE;
+	if( (sizeof(meta_data_t)+ BitmapSize * sizeof(unsigned int)) % FRAME_SIZE) metaDataFrames++;
+     
+    meta_data->metaSize = sizeof(meta_data_t) + BitmapSize * sizeof(unsigned int);
+
+	
+    long n;
+
+    for(n=0; n<BitmapSize; n++){
+    bitmap[n] = 0;
+    }
+
+    for (n=0; n<metaDataFrames; n++) 
+    {
+     SET_BIT(bitmap,n);  //mark all(loop) Frames which are used for meta_data 
+    }
+
+    
+    sem_post(mutex);   
+    munmap(map_region,size);
+
+    printf("Succsessfully created metadata block!\n");    
+  
+    return 0;
+
+}
+
+
+
 int main(int argc, char ** argv)
 {
+    printf("%ld\n",sizeof(unsigned int)*CHAR_BIT);
     fd_set readset;
     server_state_t * s;
 
@@ -67,6 +218,38 @@ int main(int argc, char ** argv)
         fprintf(stderr, "ivshmem server: could not truncate memory region\n");
         exit(-1);
     }
+
+    //  #######################################################################
+
+	//first version: simply asking for metadata -> ToDo: arguments
+	
+	printf("Do you want to use ivshmem for pscom? (y / n / Z): ");
+
+	int n;
+	for(n = 0; n <5; n++) {
+	char input = getchar();
+
+	if (input == 'n') break;
+	if (input == 'y') {
+	    printf("\ntrying to create a metadatablock...\n");
+ 	    create_metadata_for_pscom(s);
+	    break;
+	}
+	if (input == 'Z'){
+	int* mem = NULL;
+ 	int Zeros[10000] = {0};    
+        mem=mmap(NULL,sizeof(Zeros), PROT_READ|PROT_WRITE, MAP_SHARED, s->shm_fd, 0);
+	memcpy(mem,Zeros,sizeof(Zeros));
+	break;
+	}
+	
+ 	printf("\nplease enter y or n\n");
+	
+	}
+	
+
+    //  #######################################################################
+
 
     s->conn_socket = create_listening_socket(s->path);
 
@@ -254,6 +437,13 @@ int create_listening_socket(char * path) {
 }
 
 void parse_args(int argc, char **argv, server_state_t * s) {
+
+    //
+    //	
+    // toDo: Add argument to decide whether user wants to create metadata or not!
+    //
+    //
+    //
 
     int c;
 
